@@ -5,6 +5,11 @@ from datetime import datetime, timezone
 import dotenv
 from typing import Literal
 
+# nest_asyncio is incompatible with Python 3.14 (breaks asyncio.current_task()).
+# Disable it before forecasting_tools imports and applies it.
+import nest_asyncio
+nest_asyncio.apply = lambda *a, **kw: None
+
 
 from forecasting_tools import (
     AskNewsSearcher,
@@ -673,17 +678,12 @@ if __name__ == "__main__":
         folder_to_save_reports_to=None,
         skip_previously_forecasted_questions=True,
         extra_metadata_in_explanation=True,
-        # llms={  # choose your model names or GeneralLlm llms here, otherwise defaults will be chosen for you
-        #     "default": GeneralLlm(
-        #         model="openrouter/openai/gpt-4o", # "anthropic/claude-sonnet-4-20250514", etc (see docs for litellm)
-        #         temperature=0.3,
-        #         timeout=40,
-        #         allowed_tries=2,
-        #     ),
-        #     "summarizer": "openai/gpt-4o-mini",
-        #     "researcher": "asknews/news-summaries",
-        #     "parser": "openai/gpt-4o-mini",
-        # },
+        llms={
+            "default": GeneralLlm(model="claude-sonnet-4-6", temperature=0.3),
+            "summarizer": GeneralLlm(model="claude-haiku-4-5-20251001", temperature=0.3),
+            "researcher": GeneralLlm(model="openrouter/openai/gpt-4o-search-preview", temperature=0.1),
+            "parser": GeneralLlm(model="claude-haiku-4-5-20251001", temperature=0.3),
+        },
     )
 
     client = MetaculusClient()
