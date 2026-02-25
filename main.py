@@ -51,7 +51,7 @@ from forecasting_tools import (
     clean_indents,
 )
 
-from backtest_eval import generate_backtest_html
+from backtest_pipeline import generate_html, migrate_reports_json, save_bot_config, save_predictions, save_truth
 from predict_binary import BinaryForecastMixin
 from predict_multiple_choice import MultipleChoiceForecastMixin
 from predict_numeric import NumericForecastMixin
@@ -255,7 +255,9 @@ if __name__ == "__main__":
         },
     )
 
+    BOT_NAME = "spring_template_2026"
     client = MetaculusClient()
+    forecast_reports: list = []
     if run_mode == "tournament_current":
         seasonal_tournament_reports = asyncio.run(
             template_bot.forecast_on_tournament(
@@ -273,6 +275,7 @@ if __name__ == "__main__":
         # forecast_on_tournament only fetches open questions, so fetch resolved ones directly.
         template_bot.publish_reports_to_metaculus = False
         template_bot.folder_to_save_reports_to = "fall_2025_reports"
+        save_bot_config(template_bot, BOT_NAME)
         api_filter = ApiFilter(
             allowed_statuses=["resolved"],
             allowed_tournaments=[client.AIB_FALL_2025_ID],
@@ -280,10 +283,12 @@ if __name__ == "__main__":
         fall_2025_questions = asyncio.run(
             client.get_questions_matching_filter(api_filter)
         )
+        save_truth(fall_2025_questions, "fall_2025")
         forecast_reports = asyncio.run(
             template_bot.forecast_questions(fall_2025_questions, return_exceptions=True)
         )
-        generate_backtest_html(forecast_reports, output_path="fall_2025_backtest.html")
+        save_predictions(forecast_reports, BOT_NAME, "fall_2025")
+        generate_html("fall_2025", output_html="fall_2025_backtest.html")
     elif run_mode == "metaculus_cup":
         # The Metaculus cup is a good way to test the bot's performance on regularly open questions. You can also use AXC_2025_TOURNAMENT_ID = 32564 or AI_2027_TOURNAMENT_ID = "ai-2027"
         # The Metaculus cup may not be initialized near the beginning of a season (i.e. January, May, September)
