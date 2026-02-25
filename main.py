@@ -6,9 +6,12 @@ import dotenv
 from typing import Literal
 
 # nest_asyncio is incompatible with Python 3.14 (breaks asyncio.current_task()).
-# Disable it before forecasting_tools imports and applies it.
+# Disable it before forecasting_tools imports and applies it, but only on 3.14+.
+# On earlier versions, forecasting_tools needs it to allow nested asyncio.run() calls.
+import sys
 import nest_asyncio
-nest_asyncio.apply = lambda *a, **kw: None
+if sys.version_info >= (3, 14):
+    nest_asyncio.apply = lambda *a, **kw: None
 
 
 from forecasting_tools import (
@@ -679,10 +682,11 @@ if __name__ == "__main__":
         skip_previously_forecasted_questions=True,
         extra_metadata_in_explanation=True,
         llms={
-            "default": GeneralLlm(model="claude-sonnet-4-6", temperature=0.3),
-            "summarizer": GeneralLlm(model="claude-haiku-4-5-20251001", temperature=0.3),
-            "researcher": GeneralLlm(model="openrouter/openai/gpt-4o-search-preview", temperature=0.1),
-            "parser": GeneralLlm(model="claude-haiku-4-5-20251001", temperature=0.3),
+            "default": GeneralLlm(model="openrouter/anthropic/claude-sonnet-4-6", temperature=0.3),
+            "summarizer": GeneralLlm(model="openrouter/anthropic/claude-haiku-4-5", temperature=0.3),
+            "researcher": "smart-searcher/openrouter/anthropic/claude-sonnet-4-6",
+            #"researcher": GeneralLlm(model="openrouter/openai/gpt-4o-search-preview", temperature=0.1),
+            "parser": GeneralLlm(model="openrouter/anthropic/claude-haiku-4-5", temperature=0.3),
         },
     )
 
