@@ -41,6 +41,7 @@ if sys.version_info >= (3, 14):
 
 
 from forecasting_tools import (
+    ApiFilter,
     AskNewsSearcher,
     ForecastBot,
     GeneralLlm,
@@ -268,14 +269,19 @@ if __name__ == "__main__":
         )
         forecast_reports = seasonal_tournament_reports + minibench_reports
     elif run_mode == "tournament_fall_2025":
-        # Backtest mode: questions are already resolved, so don't publish and save reports locally
-        template_bot.skip_previously_forecasted_questions = False
+        # Backtest mode: questions are already resolved.
+        # forecast_on_tournament only fetches open questions, so fetch resolved ones directly.
         template_bot.publish_reports_to_metaculus = False
         template_bot.folder_to_save_reports_to = "fall_2025_reports"
+        api_filter = ApiFilter(
+            allowed_statuses=["resolved"],
+            allowed_tournaments=[client.AIB_FALL_2025_ID],
+        )
+        fall_2025_questions = asyncio.run(
+            client.get_questions_matching_filter(api_filter)
+        )
         forecast_reports = asyncio.run(
-            template_bot.forecast_on_tournament(
-                client.METACULUS_CUP_FALL_2025_ID, return_exceptions=True
-            )
+            template_bot.forecast_questions(fall_2025_questions, return_exceptions=True)
         )
         generate_backtest_html(forecast_reports, output_path="fall_2025_backtest.html")
     elif run_mode == "metaculus_cup":
