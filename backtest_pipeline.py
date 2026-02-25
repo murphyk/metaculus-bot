@@ -3,7 +3,7 @@
 Directory layout produced:
   results/{tournament}/{bot_name}_forecast.json  — raw ForecastReport objects
   results/{tournament}/truth.json                — question metadata + resolutions
-  results/{tournament}/{bot_name}/preds.json     — parsed predictions + reasoning traces
+  results/{tournament}/{bot_name}_preds.json     — parsed predictions + reasoning traces
   results/{tournament}/combined.json             — truth merged with all bots' predictions
   configs/{bot_name}_cfg.json                    — bot config snapshot
 
@@ -215,7 +215,7 @@ def parse_forecasts_to_preds(
     tournament_name: str,
     results_dir: str = "results",
 ) -> Path:
-    """Parse {bot_name}_forecast.json → {bot_name}/preds.json with reasoning traces.
+    """Parse {bot_name}_forecast.json → {bot_name}_preds.json with reasoning traces.
 
     The 'reasoning' field in each preds entry is taken directly from the
     'explanation' field of the raw ForecastReport, which contains the full
@@ -239,9 +239,9 @@ def _write_preds_from_raw(
     tournament_name: str,
     results_dir: str,
 ) -> Path:
-    out_dir = Path(results_dir) / tournament_name / bot_name
+    out_dir = Path(results_dir) / tournament_name
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "preds.json"
+    out_path = out_dir / f"{bot_name}_preds.json"
 
     preds: dict[str, dict] = {}
     for r in raw_reports:
@@ -371,7 +371,7 @@ def migrate_reports_json(
     truth_path.write_text(json.dumps(truth_payload, indent=2, default=str))
     logger.info(f"Saved truth to {truth_path} ({len(questions_dict)} questions)")
 
-    # ---- {bot_name}/preds.json (with reasoning) ----
+    # ---- {bot_name}_preds.json (with reasoning) ----
     preds_path = _write_preds_from_raw(raw_reports, bot_name, tournament_name, results_dir)
 
     return truth_path, preds_path
@@ -392,8 +392,8 @@ def merge(tournament_name: str, results_dir: str = "results") -> Path:
     questions = truth_data["questions"]
 
     bots = sorted(
-        d.name for d in base.iterdir()
-        if d.is_dir() and (d / "preds.json").exists()
+        p.name.removesuffix("_preds.json")
+        for p in base.glob("*_preds.json")
     )
 
     combined_questions: dict[str, dict] = {}
@@ -410,7 +410,7 @@ def merge(tournament_name: str, results_dir: str = "results") -> Path:
         }
 
     for bot_name in bots:
-        bot_preds = json.loads((base / bot_name / "preds.json").read_text())["predictions"]
+        bot_preds = json.loads((base / f"{bot_name}_preds.json").read_text())["predictions"]
         for qid, p in bot_preds.items():
             if qid not in combined_questions:
                 continue
@@ -469,7 +469,20 @@ def generate_html(
     missing_resolution = sum(1 for q in questions.values() if q.get("resolution") is None)
     has_any_resolution = missing_resolution < len(questions)
 
-    html = _build_html(questions, bots, mean_briers, tournament_name, missing_resolution, has_any_resolution)
+    # Load per-bot reasoning from preds files (keyed by qid)
+    reasoning: dict[str, dict[str, str]] = {}
+    base = Path(results_dir) / tournament_name
+    for bot_name in bots:
+        preds_path = base / f"{bot_name}_preds.json"
+        if preds_path.exists():
+            bot_preds = json.loads(preds_path.read_text())["predictions"]
+            reasoning[bot_name] = {
+                qid: p["reasoning"]
+                for qid, p in bot_preds.items()
+                if p.get("reasoning")
+            }
+
+    html = _build_html(questions, bots, mean_briers, reasoning, tournament_name, missing_resolution, has_any_resolution)
     out_path = Path(output_html)
     out_path.write_text(html, encoding="utf-8")
     logger.info(f"Backtest HTML saved to {out_path}")
@@ -488,6 +501,7 @@ def _build_html(
     questions: dict,
     bots: list[str],
     mean_briers: dict[str, float | None],
+    reasoning: dict[str, dict[str, str]],
     tournament_name: str,
     missing_resolution: int,
     has_any_resolution: bool,
@@ -499,7 +513,7 @@ def _build_html(
             f'<p class="warn">⚠ {missing_resolution} of {len(questions)} questions have no resolution value. '
             f'Edit <code>results/{tournament_name}/truth.json</code> to populate the '
             f'<code>"resolution"</code> field for each question, then re-run '
-            f'<code>python backtest_pipeline.py --regenerate-html {tournament_name}</code>.</p>'
+            f'<code>python backtest_pipeline.py html {tournament_name}</code>.</p>'
         )
     if has_any_resolution and bots:
         rows_html_summary = "".join(
@@ -527,7 +541,7 @@ def _build_html(
 
     # --- table rows ---
     rows_html = ""
-    for i, (_, q) in enumerate(questions.items(), 1):
+    for i, (qid, q) in enumerate(questions.items(), 1):
         res = q.get("resolution")
         res_display = str(res) if res is not None else '<span class="null">—</span>'
         pred_cols = ""
@@ -538,12 +552,19 @@ def _build_html(
             else:
                 readable = pred_info["readable"].replace("\n", "<br>")
                 brier = pred_info.get("brier")
-                if brier is not None:
-                    color = _brier_color(brier)
-                    brier_cell = f'<td style="background:{color}">{brier:.4f}</td>'
+                brier_cell = (
+                    f'<td style="background:{_brier_color(brier)}">{brier:.4f}</td>'
+                    if brier is not None else '<td class="null">—</td>'
+                )
+                has_reasoning = bool(reasoning.get(bot_name, {}).get(qid))
+                if has_reasoning:
+                    pred_cell = (
+                        f'<td><a href="#" class="reasoning-link" '
+                        f'data-bot="{bot_name}" data-qid="{qid}">{readable}</a></td>'
+                    )
                 else:
-                    brier_cell = '<td class="null">—</td>'
-                pred_cols += f"<td>{readable}</td>{brier_cell}"
+                    pred_cell = f"<td>{readable}</td>"
+                pred_cols += pred_cell + brier_cell
 
         q_type = (q.get("type") or "").replace("_", " ")
         rows_html += (
@@ -556,11 +577,16 @@ def _build_html(
             f"</tr>\n"
         )
 
+    # Embed reasoning as a JS object (bot → qid → text).
+    # json.dumps handles all escaping; the outer f-string braces are doubled.
+    reasoning_js = json.dumps(reasoning, ensure_ascii=False)
+
+    title = tournament_name.replace("_", " ").title()
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Backtest Results — {tournament_name.replace("_", " ").title()}</title>
+<title>Backtest Results — {title}</title>
 <style>
   body {{ font-family: sans-serif; padding: 1em 2em; color: #222; }}
   h1 {{ font-size: 1.4em; margin-bottom: 0.5em; }}
@@ -573,17 +599,47 @@ def _build_html(
   table.main {{ border-collapse: collapse; width: 100%; font-size: 0.87em; }}
   table.main th {{ background: #4472c4; color: #fff; padding: 8px 10px;
                    text-align: left; white-space: nowrap; }}
-  table.main td {{ padding: 5px 10px; border-bottom: 1px solid #ddd;
-                   vertical-align: top; }}
+  table.main td {{ padding: 5px 10px; border-bottom: 1px solid #ddd; vertical-align: top; }}
   table.main tr:nth-child(even) td {{ background: #f7f7f7; }}
   a {{ color: #1a73e8; text-decoration: none; }}
   a:hover {{ text-decoration: underline; }}
   .q-type {{ font-size: 0.8em; color: #666; white-space: nowrap; }}
   .null {{ color: #aaa; }}
+  .reasoning-link {{ border-bottom: 1px dashed #1a73e8; cursor: pointer; }}
+  /* Modal */
+  #modal-overlay {{
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.45); z-index: 1000;
+    align-items: center; justify-content: center;
+  }}
+  #modal-overlay.open {{ display: flex; }}
+  #modal-box {{
+    background: #fff; border-radius: 6px; box-shadow: 0 4px 24px rgba(0,0,0,.3);
+    width: min(860px, 92vw); max-height: 85vh;
+    display: flex; flex-direction: column;
+  }}
+  #modal-header {{
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 16px; border-bottom: 1px solid #ddd; flex-shrink: 0;
+  }}
+  #modal-title {{ font-weight: bold; font-size: 0.95em; color: #444; }}
+  #modal-close {{
+    background: none; border: none; font-size: 1.4em; cursor: pointer;
+    color: #888; line-height: 1; padding: 0 4px;
+  }}
+  #modal-close:hover {{ color: #222; }}
+  #modal-body {{
+    overflow-y: auto; padding: 14px 18px; flex: 1;
+  }}
+  #modal-body pre {{
+    white-space: pre-wrap; word-break: break-word;
+    font-family: ui-monospace, monospace; font-size: 0.82em;
+    line-height: 1.55; margin: 0;
+  }}
 </style>
 </head>
 <body>
-<h1>Backtest Results — {tournament_name.replace("_", " ").title()}</h1>
+<h1>Backtest Results — {title}</h1>
 {summary_html}
 <table class="main">
 <thead><tr>
@@ -592,6 +648,45 @@ def _build_html(
 <tbody>
 {rows_html}</tbody>
 </table>
+
+<!-- Reasoning modal -->
+<div id="modal-overlay">
+  <div id="modal-box">
+    <div id="modal-header">
+      <span id="modal-title">Reasoning</span>
+      <button id="modal-close" title="Close">×</button>
+    </div>
+    <div id="modal-body"><pre id="modal-content"></pre></div>
+  </div>
+</div>
+
+<script>
+const REASONING = {reasoning_js};
+
+document.querySelectorAll(".reasoning-link").forEach(function(el) {{
+  el.addEventListener("click", function(e) {{
+    e.preventDefault();
+    const bot = el.dataset.bot;
+    const qid = el.dataset.qid;
+    const text = (REASONING[bot] && REASONING[bot][qid]) || "(no reasoning stored)";
+    document.getElementById("modal-title").textContent = bot + " — reasoning";
+    document.getElementById("modal-content").textContent = text;
+    document.getElementById("modal-overlay").classList.add("open");
+  }});
+}});
+
+document.getElementById("modal-close").addEventListener("click", function() {{
+  document.getElementById("modal-overlay").classList.remove("open");
+}});
+
+document.getElementById("modal-overlay").addEventListener("click", function(e) {{
+  if (e.target === this) this.classList.remove("open");
+}});
+
+document.addEventListener("keydown", function(e) {{
+  if (e.key === "Escape") document.getElementById("modal-overlay").classList.remove("open");
+}});
+</script>
 </body>
 </html>"""
 
