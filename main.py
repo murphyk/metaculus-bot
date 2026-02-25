@@ -6,39 +6,51 @@ import dotenv
 from typing import Literal
 
 # nest_asyncio is incompatible with Python 3.14 (breaks asyncio.current_task()).
-# Disable it before forecasting_tools imports and applies it, but only on 3.14+.
-# On earlier versions, forecasting_tools needs it to allow nested asyncio.run() calls.
+# On 3.14+ we disable nest_asyncio and instead patch asyncio.run so that calls
+# from inside a running event loop (as forecasting_tools does internally) are
+# dispatched to a fresh thread rather than failing with RuntimeError.
+# On earlier versions, forecasting_tools needs nest_asyncio for the same reason.
 import sys
+import threading
 import nest_asyncio
 if sys.version_info >= (3, 14):
     nest_asyncio.apply = lambda *a, **kw: None
+    _orig_asyncio_run = asyncio.run
+
+    def _asyncio_run_nested_safe(coro, /, **kwargs):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return _orig_asyncio_run(coro, **kwargs)
+        # Already inside a running loop — run in a new thread with its own loop
+        _result: list = [None]
+        _exc: list = [None]
+        def _target():
+            try:
+                _result[0] = _orig_asyncio_run(coro)
+            except BaseException as e:
+                _exc[0] = e
+        t = threading.Thread(target=_target, daemon=True)
+        t.start()
+        t.join()
+        if _exc[0] is not None:
+            raise _exc[0]
+        return _result[0]
+
+    asyncio.run = _asyncio_run_nested_safe
 
 
 from forecasting_tools import (
     AskNewsSearcher,
-    BinaryQuestion,
     ForecastBot,
     GeneralLlm,
     MetaculusClient,
     MetaculusQuestion,
-    MultipleChoiceQuestion,
-    NumericDistribution,
-    NumericQuestion,
-    DateQuestion,
-    DatePercentile,
-    Percentile,
-    ConditionalQuestion,
-    ConditionalPrediction,
-    PredictionTypes,
-    PredictionAffirmed,
-    BinaryPrediction,
-    PredictedOptionList,
-    ReasonedPrediction,
     SmartSearcher,
     clean_indents,
-    structure_output,
 )
 
+from backtest_eval import generate_backtest_html
 from predict_binary import BinaryForecastMixin
 from predict_multiple_choice import MultipleChoiceForecastMixin
 from predict_numeric import NumericForecastMixin
@@ -256,12 +268,16 @@ if __name__ == "__main__":
         )
         forecast_reports = seasonal_tournament_reports + minibench_reports
     elif run_mode == "tournament_fall_2025":
+        # Backtest mode: questions are already resolved, so don't publish and save reports locally
         template_bot.skip_previously_forecasted_questions = False
+        template_bot.publish_reports_to_metaculus = False
+        template_bot.folder_to_save_reports_to = "fall_2025_reports"
         forecast_reports = asyncio.run(
             template_bot.forecast_on_tournament(
                 client.METACULUS_CUP_FALL_2025_ID, return_exceptions=True
             )
         )
+        generate_backtest_html(forecast_reports, output_path="fall_2025_backtest.html")
     elif run_mode == "metaculus_cup":
         # The Metaculus cup is a good way to test the bot's performance on regularly open questions. You can also use AXC_2025_TOURNAMENT_ID = 32564 or AI_2027_TOURNAMENT_ID = "ai-2027"
         # The Metaculus cup may not be initialized near the beginning of a season (i.e. January, May, September)
