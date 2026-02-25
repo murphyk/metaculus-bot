@@ -51,13 +51,13 @@ logger = logging.getLogger(__name__)
 
 
 class SpringTemplateBot2026(
-    ForecastBot,
     BinaryForecastMixin,
     MultipleChoiceForecastMixin,
     NumericForecastMixin,
     DateForecastMixin,
     ConditionalForecastMixin,
     SharedForecastHelpers,
+    ForecastBot,
 ):
     """
     This is the template bot for Spring 2026 Metaculus AI Tournament.
@@ -212,19 +212,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["tournament", "metaculus_cup", "test_questions"],
-        default="tournament",
-        help="Specify the run mode (default: tournament)",
+        choices=["tournament_current", "tournament_fall_2025", "metaculus_cup", "test_questions"],
+        default="tournament_current",
+        help="Specify the run mode (default: tournament_current)",
     )
     args = parser.parse_args()
-    run_mode: Literal["tournament", "metaculus_cup", "test_questions"] = args.mode
+    run_mode: Literal["tournament_current", "tournament_fall_2025", "metaculus_cup", "test_questions"] = args.mode
     assert run_mode in [
-        "tournament",
+        "tournament_current",
+        "tournament_fall_2025",
         "metaculus_cup",
         "test_questions",
     ], "Invalid run mode"
 
-    template_bot = SpringTemplateBot2026(
+    template_bot = SpringTemplateBot2026(  # type: ignore[abstract]
         research_reports_per_question=1,
         predictions_per_research_report=5,
         use_research_summary_to_forecast=False,
@@ -242,8 +243,7 @@ if __name__ == "__main__":
     )
 
     client = MetaculusClient()
-    if run_mode == "tournament":
-        # You may want to change this to the specific tournament ID you want to forecast on
+    if run_mode == "tournament_current":
         seasonal_tournament_reports = asyncio.run(
             template_bot.forecast_on_tournament(
                 client.CURRENT_AI_COMPETITION_ID, return_exceptions=True
@@ -255,6 +255,13 @@ if __name__ == "__main__":
             )
         )
         forecast_reports = seasonal_tournament_reports + minibench_reports
+    elif run_mode == "tournament_fall_2025":
+        template_bot.skip_previously_forecasted_questions = False
+        forecast_reports = asyncio.run(
+            template_bot.forecast_on_tournament(
+                client.METACULUS_CUP_FALL_2025_ID, return_exceptions=True
+            )
+        )
     elif run_mode == "metaculus_cup":
         # The Metaculus cup is a good way to test the bot's performance on regularly open questions. You can also use AXC_2025_TOURNAMENT_ID = 32564 or AI_2027_TOURNAMENT_ID = "ai-2027"
         # The Metaculus cup may not be initialized near the beginning of a season (i.e. January, May, September)
