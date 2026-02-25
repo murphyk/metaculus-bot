@@ -1,10 +1,11 @@
 """backtest_pipeline.py — multi-bot forecasting evaluation pipeline.
 
 Directory layout produced:
-  results/{tournament}/truth.json             — question metadata + resolutions
-  results/{tournament}/{bot_name}/preds.json  — one bot's predictions
-  results/{tournament}/combined.json          — truth merged with all bots' predictions
-  configs/{bot_name}_cfg.json                 — bot config snapshot
+  results/{tournament}/{bot_name}_forecast.json  — raw ForecastReport objects
+  results/{tournament}/truth.json                — question metadata + resolutions
+  results/{tournament}/{bot_name}/preds.json     — parsed predictions + reasoning traces
+  results/{tournament}/combined.json             — truth merged with all bots' predictions
+  configs/{bot_name}_cfg.json                    — bot config snapshot
 
 The Metaculus REST API does not expose resolution values for regular users, so
 'resolution' in truth.json is null by default.  Populate it manually to enable
@@ -14,14 +15,13 @@ Brier score computation:
   numeric/discrete→ the resolved float value
 
 Run standalone to migrate an existing raw JSON report file:
-  python backtest_pipeline.py path/to/Forecasts-*.json \\
+  python backtest_pipeline.py migrate path/to/Forecasts-*.json \\
       --bot-name spring_template_2026 --tournament fall_2025
 """
 from __future__ import annotations
 
 import json
 import logging
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
@@ -155,8 +155,8 @@ def save_truth(
             "options": getattr(q, "options", None),
             "resolution": existing_resolutions.get(qid, None),
             "resolution_time": (
-                q.actual_resolution_time.isoformat()
-                if getattr(q, "actual_resolution_time", None)
+                rt.isoformat()
+                if (rt := getattr(q, "actual_resolution_time", None)) is not None
                 else None
             ),
             "state": getattr(q, "state", None),
@@ -179,31 +179,80 @@ def save_truth(
 
 
 # ---------------------------------------------------------------------------
-# save_predictions
+# save_raw_forecasts  (step 1)
 # ---------------------------------------------------------------------------
 
-def save_predictions(
+def save_raw_forecasts(
     reports: Sequence[ForecastReport | BaseException],
     bot_name: str,
     tournament_name: str,
     results_dir: str = "results",
 ) -> Path:
-    """Save bot predictions to results/{tournament}/{bot_name}/preds.json."""
+    """Serialize ForecastReport objects to results/{tournament}/{bot_name}_forecast.json.
+
+    Uses the library's own .to_json() serializer so the file is identical in
+    structure to the files forecasting_tools writes to folder_to_save_reports_to.
+    The 'explanation' field in each report contains the full per-forecaster CoT
+    reasoning traces.
+    """
+    out_dir = Path(results_dir) / tournament_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{bot_name}_forecast.json"
+
+    valid = [r for r in reports if isinstance(r, ForecastReport)]
+    raw = [r.to_json() for r in valid]
+    out_path.write_text(json.dumps(raw, indent=2, default=str))
+    logger.info(f"Saved {len(raw)} raw forecast reports to {out_path}")
+    return out_path
+
+
+# ---------------------------------------------------------------------------
+# parse_forecasts_to_preds  (step 2)
+# ---------------------------------------------------------------------------
+
+def parse_forecasts_to_preds(
+    bot_name: str,
+    tournament_name: str,
+    results_dir: str = "results",
+) -> Path:
+    """Parse {bot_name}_forecast.json → {bot_name}/preds.json with reasoning traces.
+
+    The 'reasoning' field in each preds entry is taken directly from the
+    'explanation' field of the raw ForecastReport, which contains the full
+    Markdown report including individual forecaster CoT traces.
+    """
+    forecast_path = Path(results_dir) / tournament_name / f"{bot_name}_forecast.json"
+    if not forecast_path.exists():
+        raise FileNotFoundError(f"No forecast file at {forecast_path}")
+    with open(forecast_path, encoding="utf-8") as f:
+        raw_reports = json.load(f)
+    return _write_preds_from_raw(raw_reports, bot_name, tournament_name, results_dir)
+
+
+# ---------------------------------------------------------------------------
+# Shared helper: raw JSON list → preds.json
+# ---------------------------------------------------------------------------
+
+def _write_preds_from_raw(
+    raw_reports: list[dict],
+    bot_name: str,
+    tournament_name: str,
+    results_dir: str,
+) -> Path:
     out_dir = Path(results_dir) / tournament_name / bot_name
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "preds.json"
 
     preds: dict[str, dict] = {}
-    for r in reports:
-        if not isinstance(r, ForecastReport):
-            continue
-        q = r.question
-        qid = str(q.id_of_post)
-        qt = getattr(q, "question_type", "unknown") or "unknown"
-        raw = _serialize_prediction(r.prediction)
+    for r in raw_reports:
+        q = r["question"]
+        qid = str(q["id_of_post"])
+        qt = q.get("question_type") or "unknown"
+        raw_pred = r.get("prediction")
         preds[qid] = {
-            "prediction": raw,
-            "readable": _prediction_to_readable(raw, qt),
+            "prediction": raw_pred,
+            "readable": _prediction_to_readable(raw_pred, qt),
+            "reasoning": r.get("explanation") or None,
         }
 
     payload = {
@@ -262,6 +311,11 @@ def migrate_reports_json(
 ) -> tuple[Path, Path]:
     """Convert an existing forecasting_tools raw JSON report file to the new format.
 
+    Writes:
+      results/{tournament}/{bot_name}_forecast.json  (copy of the source file)
+      results/{tournament}/truth.json                (question metadata)
+      results/{tournament}/{bot_name}/preds.json     (predictions + reasoning)
+
     Returns (truth_path, preds_path).  Previously entered resolutions in an
     existing truth.json are preserved.
     """
@@ -270,8 +324,14 @@ def migrate_reports_json(
 
     out_dir = Path(results_dir) / tournament_name
     out_dir.mkdir(parents=True, exist_ok=True)
-    truth_path = out_dir / "truth.json"
 
+    # ---- {bot_name}_forecast.json (canonical raw copy) ----
+    forecast_path = out_dir / f"{bot_name}_forecast.json"
+    forecast_path.write_text(json.dumps(raw_reports, indent=2, default=str))
+    logger.info(f"Copied raw forecasts to {forecast_path} ({len(raw_reports)} reports)")
+
+    # ---- truth.json ----
+    truth_path = out_dir / "truth.json"
     existing_resolutions: dict[str, object] = {}
     if truth_path.exists():
         try:
@@ -311,29 +371,8 @@ def migrate_reports_json(
     truth_path.write_text(json.dumps(truth_payload, indent=2, default=str))
     logger.info(f"Saved truth to {truth_path} ({len(questions_dict)} questions)")
 
-    preds_dir = out_dir / bot_name
-    preds_dir.mkdir(parents=True, exist_ok=True)
-    preds_path = preds_dir / "preds.json"
-
-    preds: dict[str, dict] = {}
-    for r in raw_reports:
-        q = r["question"]
-        qid = str(q["id_of_post"])
-        qt = q.get("question_type") or "unknown"
-        raw = r.get("prediction")
-        preds[qid] = {
-            "prediction": raw,
-            "readable": _prediction_to_readable(raw, qt),
-        }
-
-    preds_payload = {
-        "bot_name": bot_name,
-        "tournament": tournament_name,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "predictions": preds,
-    }
-    preds_path.write_text(json.dumps(preds_payload, indent=2, default=str))
-    logger.info(f"Saved predictions to {preds_path} ({len(preds)} questions)")
+    # ---- {bot_name}/preds.json (with reasoning) ----
+    preds_path = _write_preds_from_raw(raw_reports, bot_name, tournament_name, results_dir)
 
     return truth_path, preds_path
 
@@ -488,7 +527,7 @@ def _build_html(
 
     # --- table rows ---
     rows_html = ""
-    for i, (qid, q) in enumerate(questions.items(), 1):
+    for i, (_, q) in enumerate(questions.items(), 1):
         res = q.get("resolution")
         res_display = str(res) if res is not None else '<span class="null">—</span>'
         pred_cols = ""

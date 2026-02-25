@@ -51,7 +51,7 @@ from forecasting_tools import (
     clean_indents,
 )
 
-from backtest_pipeline import generate_html, migrate_reports_json, save_bot_config, save_predictions, save_truth
+from backtest_pipeline import generate_html, migrate_reports_json, parse_forecasts_to_preds, save_bot_config, save_raw_forecasts, save_truth
 from predict_binary import BinaryForecastMixin
 from predict_multiple_choice import MultipleChoiceForecastMixin
 from predict_numeric import NumericForecastMixin
@@ -287,7 +287,8 @@ if __name__ == "__main__":
         forecast_reports = asyncio.run(
             template_bot.forecast_questions(fall_2025_questions, return_exceptions=True)
         )
-        save_predictions(forecast_reports, BOT_NAME, "fall_2025")
+        save_raw_forecasts(forecast_reports, BOT_NAME, "fall_2025")
+        parse_forecasts_to_preds(BOT_NAME, "fall_2025")
         generate_html("fall_2025", output_html="fall_2025_backtest.html")
     elif run_mode == "metaculus_cup":
         # The Metaculus cup is a good way to test the bot's performance on regularly open questions. You can also use AXC_2025_TOURNAMENT_ID = 32564 or AI_2027_TOURNAMENT_ID = "ai-2027"
