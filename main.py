@@ -1,9 +1,26 @@
 import argparse
 import asyncio
+import contextvars
 import logging
 from datetime import datetime, timezone
 import dotenv
 from typing import Literal
+
+# ---------------------------------------------------------------------------
+# Per-question logging context
+# ---------------------------------------------------------------------------
+_question_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "question_id", default=""
+)
+
+
+class _QuestionFilter(logging.Filter):
+    """Prepend [Q<id>] to every log record when inside a question context."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        qid = _question_ctx.get()
+        if qid:
+            record.msg = f"[Q{qid}] {record.msg}"
+        return True
 
 # nest_asyncio is incompatible with Python 3.14 (breaks asyncio.current_task()).
 # On 3.14+ we disable nest_asyncio and instead patch asyncio.run so that calls
@@ -158,6 +175,8 @@ class SpringTemplateBot2026(
     ##################################### RESEARCH #####################################
 
     async def run_research(self, question: MetaculusQuestion) -> str:
+        qid = question.page_url.rstrip("/").split("/")[-1]
+        _question_ctx.set(qid)
         async with self._concurrency_limiter:
             research = ""
             researcher = self.get_llm("researcher")
@@ -228,6 +247,9 @@ if __name__ == "__main__":
 
     # Suppress OpenAI Agents tracing warning (fired when OPENAI_API_KEY is unset)
     logging.getLogger("openai.agents").setLevel(logging.ERROR)
+
+    # Add per-question context prefix to all log lines
+    logging.getLogger().addFilter(_QuestionFilter())
 
     parser = argparse.ArgumentParser(
         description="Run the TemplateBot forecasting system"
