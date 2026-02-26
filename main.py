@@ -199,7 +199,14 @@ class SpringTemplateBot2026(
                     num_sites_per_search=10,
                     use_advanced_filters=False,
                 )
-                research = await searcher.invoke(prompt)
+                try:
+                    research = await searcher.invoke(prompt)
+                except Exception as e:
+                    logger.warning(
+                        f"SmartSearcher failed for {question.page_url} ({e}); "
+                        f"falling back to LLM-only research"
+                    )
+                    research = await self.get_llm("default", "llm").invoke(prompt)
             elif not researcher or researcher == "None" or researcher == "no_research":
                 research = ""
             else:
@@ -225,14 +232,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["tournament_current", "tournament_fall_2025", "metaculus_cup", "test_questions"],
-        default="tournament_current",
-        help="Specify the run mode (default: tournament_current)",
+        choices=["tournament", "tournament_fall_2025", "metaculus_cup", "test_questions"],
+        default="tournament",
+        help="Specify the run mode (default: tournament)",
     )
     args = parser.parse_args()
-    run_mode: Literal["tournament_current", "tournament_fall_2025", "metaculus_cup", "test_questions"] = args.mode
+    run_mode: Literal["tournament", "tournament_fall_2025", "metaculus_cup", "test_questions"] = args.mode
     assert run_mode in [
-        "tournament_current",
+        "tournament",
         "tournament_fall_2025",
         "metaculus_cup",
         "test_questions",
@@ -258,7 +265,7 @@ if __name__ == "__main__":
     BOT_NAME = "spring_template_2026"
     client = MetaculusClient()
     forecast_reports: list = []
-    if run_mode == "tournament_current":
+    if run_mode == "tournament":
         seasonal_tournament_reports = asyncio.run(
             template_bot.forecast_on_tournament(
                 client.CURRENT_AI_COMPETITION_ID, return_exceptions=True
