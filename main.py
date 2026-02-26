@@ -226,6 +226,9 @@ if __name__ == "__main__":
     litellm_logger.setLevel(logging.WARNING)
     litellm_logger.propagate = False
 
+    # Suppress OpenAI Agents tracing warning (fired when OPENAI_API_KEY is unset)
+    logging.getLogger("openai.agents").setLevel(logging.ERROR)
+
     parser = argparse.ArgumentParser(
         description="Run the TemplateBot forecasting system"
     )
