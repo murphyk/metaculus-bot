@@ -451,7 +451,7 @@ def generate_html(
     bots = data["bots"]
     questions = data["questions"]
     if output_html is None:
-        output_html = f"{tournament_name}_backtest.html"
+        output_html = str(Path(results_dir) / tournament_name / "summary.html")
 
     # Per-bot mean Brier (binary only)
     bot_briers: dict[str, list[float]] = {b: [] for b in bots}
@@ -734,7 +734,7 @@ if __name__ == "__main__":
         migrate_reports_json(args.json_path, args.bot_name, args.tournament, args.results_dir)
         merge(args.tournament, args.results_dir)
         generate_html(args.tournament, args.results_dir)
-        print(f"Done. HTML saved to {args.tournament}_backtest.html")
+        print(f"Done. HTML saved to {args.results_dir}/{args.tournament}/summary.html")
     elif args.cmd == "html":
         out = generate_html(args.tournament, args.results_dir, args.output)
         print(f"Done. HTML saved to {out}")

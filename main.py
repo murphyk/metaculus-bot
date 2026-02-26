@@ -289,7 +289,7 @@ if __name__ == "__main__":
         )
         save_raw_forecasts(forecast_reports, BOT_NAME, "fall_2025")
         parse_forecasts_to_preds(BOT_NAME, "fall_2025")
-        generate_html("fall_2025", output_html="fall_2025_backtest.html")
+        generate_html("fall_2025")
     elif run_mode == "metaculus_cup":
         # The Metaculus cup is a good way to test the bot's performance on regularly open questions. You can also use AXC_2025_TOURNAMENT_ID = 32564 or AI_2027_TOURNAMENT_ID = "ai-2027"
         # The Metaculus cup may not be initialized near the beginning of a season (i.e. January, May, September)
